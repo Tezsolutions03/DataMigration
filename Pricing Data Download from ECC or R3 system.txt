@@ -1,0 +1,413 @@
+*&---------------------------------------------------------------------*
+*& Report  ZPRICING_DATA_DOWNLOAD
+*&---------------------------------------------------------------------*
+* Program to download Condition Table data or Pricing Data from 
+* ECC or R3 System.
+* If you are planning to migrate the pricing condition record data 
+* to S/4 HANA using File transfer method of LTMC transaction, then this 
+* program can help you to download the pricing condition record data from 
+* source R3 or ECC system in the required file format.
+* Program generates three files at its output. 
+* First file : Contains data records of condition table data
+* Second file : Content of primary key of the condition table data record
+* Third File : Contains quantity scales Data
+* You can copy the program to your R3 or ECC system. 
+* Replace the <tabname> with condition table name(eg A901, A902 etc). 
+* Adapt the fields in the SELECT query of subroutine get_data_a951. 
+* Activate the program.
+
+REPORT ZPRICING_DATA_DOWNLOAD.
+*Selection Screen- Checkbox
+
+SELECTION-SCREEN: BEGIN OF BLOCK a WITH FRAME TITLE text-001. "Data Load Tables
+PARAMETERS : p_<tabname> TYPE c AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK a.
+
+*Selection Screen - File Path and valid date
+SELECTION-SCREEN: BEGIN OF BLOCK b WITH FRAME TITLE text-002.   "Selection Criteria
+PARAMETERS : p_valon TYPE sy-datum DEFAULT '20230101',          "Valid On
+             p_file1  LIKE rlgrap-filename OBLIGATORY.          "File Path
+SELECTION-SCREEN END OF BLOCK b.
+
+*Types Declaration
+TYPES : BEGIN OF ts_sheet,
+          knumh TYPE knumh,
+          kappl TYPE kappl,
+          kschl TYPE kscha,
+          datab TYPE kodatab,
+          datbi TYPE kodatbi,
+          krech TYPE krech,
+          kbetr TYPE kbetr_kond,
+          konwa TYPE konwa,
+          kpein TYPE kpein,
+          kmein TYPE kmein,
+          kumza TYPE kumza,
+          kumne TYPE kumne,
+          meins TYPE meins,
+          kznep TYPE kznep,
+          valtg TYPE valtg,
+          valdt TYPE valdt,
+          zterm TYPE dzterm,
+          mxwrt TYPE mxwrt,
+          gkwrt TYPE gkwrt,
+          tabno TYPE char4,
+          auart_sd TYPE auart,
+          inco1    TYPE inco1,
+          kfrst    TYPE kfrst,
+          lland    TYPE lland,
+          sdabw    TYPE sdabw,
+        END OF ts_sheet.
+*Condition Records
+TYPES : BEGIN OF ts_sheet1,
+          knumh TYPE knumh,
+          kappl TYPE kappl,
+          kschl TYPE kscha,
+          datab TYPE char10,
+          datbi TYPE char10,
+          krech TYPE krech,
+          kbetr TYPE kbetr_kond,
+          konwa TYPE konwa,
+          kpein TYPE kpein,
+          kmein TYPE kmein,
+          kumza TYPE kumza,
+          kumne TYPE kumne,
+          meins TYPE meins,
+          kznep TYPE kznep,
+          valtg TYPE valtg,
+          valdt TYPE valdt,
+          zterm TYPE dzterm,
+          mxwrt TYPE mxwrt,
+          gkwrt TYPE gkwrt,
+        END OF ts_sheet1,
+* Condition Table Keys
+      BEGIN OF ts_sheet2,
+        knumh     TYPE knumh,
+        fieldname TYPE fieldname,
+        fieldval  TYPE char80,
+      END OF ts_sheet2,
+      BEGIN OF ts_dd03l,
+        tabname TYPE tabname,
+        fieldname TYPE fieldname,
+      END OF ts_dd03l,
+      BEGIN OF ts_sheet3,
+        knumh TYPE knumh,
+        klfn1 TYPE klfn1,
+        kstbm TYPE kstbm,
+        konms TYPE konms,
+        kbetr TYPE kbetr,
+        konwa TYPE konwa,
+      END OF ts_sheet3.
+
+* Data Declaration
+* Internal Table
+DATA : gt_sheet   TYPE TABLE OF ts_sheet,
+       gt_sheet1  TYPE TABLE OF ts_sheet1,
+       gt_sheet_t TYPE TABLE OF ts_sheet,
+       gt_sheet2  TYPE TABLE OF ts_sheet2,
+       gt_sheet3  TYPE TABLE OF ts_sheet3,
+       gt_dd03l   TYPE TABLE OF ts_dd03l,
+*Work Area
+       gs_sheet2  TYPE ts_sheet2,
+       gs_dd03l   TYPE ts_dd03l,
+* Variable
+       gv_file    TYPE string,
+       gv_success TYPE flag.
+
+*Constant Declaration
+CONSTANTS :
+            gc_mandt      TYPE fieldname VALUE 'MANDT',
+            gc_kappl      TYPE fieldname VALUE 'KAPPL',
+            gc_kschl      TYPE fieldname VALUE 'KSCHL',
+            gc_datbi      TYPE fieldname VALUE 'DATBI',
+            gc_slash      TYPE c         VALUE '/',
+            gc_asc(10)    TYPE c         VALUE 'ASC',
+            gc_<tabname>       TYPE tabname   VALUE '<tabname>',
+            gc_und(1)     TYPE c         VALUE '_',
+            gc_cond(15)   TYPE c         VALUE 'PRC_CONDITION',
+            gc_scale(5)   TYPE c         VALUE 'SCALE',
+            gc_slh(1)     TYPE c         VALUE '\',
+            gc_key(3)     TYPE c         VALUE 'KEY'.
+
+* Field Symbol
+FIELD-SYMBOLS :<gv_value>   TYPE any,
+               <gs_sheet>   TYPE ts_sheet,
+               <gs_sheet1>  TYPE ts_sheet1.
+
+* Get the File Path for ondition Records
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file1.
+  PERFORM get_online_filename USING p_file1.
+
+START-OF-SELECTION.
+  IF p_<tabname> IS INITIAL.
+* Display the message to select atleast one checkbox
+    MESSAGE e000(zasd3) WITH text-003. "Select atleast one checkbox
+  ENDIF.
+
+* Get the table fields for the relevant tables with Key field
+  SELECT tabname fieldname FROM dd03l
+    INTO TABLE gt_dd03l
+    WHERE tabname IN (gc_<tabname>)
+    AND fieldname NOT IN (gc_mandt, gc_kappl, gc_kschl, gc_datbi)
+    AND keyflag = abap_true.
+  IF sy-subrc = 0.
+    SORT gt_dd03l.
+  ENDIF.
+
+* <tabname>
+  IF p_<tabname> IS NOT INITIAL.
+    PERFORM get_data_<tabname>.
+    IF gt_sheet1 IS NOT INITIAL.
+* Download the Pricing Condition Details for <tabname>
+      PERFORM download_sheet USING gc_<tabname>.
+      IF gv_success IS NOT INITIAL.
+        WRITE / text-004. "Data Extracted Successfully for Pricing Condition Records(<tabname>)
+        CLEAR gv_success.
+      ENDIF.
+      FREE: gt_sheet,gt_sheet1,gt_sheet2,gt_sheet3,gt_sheet_t.
+    ELSE.
+      WRITE: / text-005.  "Pricing Condition Records Not Found
+    ENDIF.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_ONLINE_FILENAME
+*&---------------------------------------------------------------------*
+*  Get the filename for Condition Records and Condition Table Keys
+*----------------------------------------------------------------------*
+FORM get_online_filename  USING   p_p_file TYPE rlgrap-filename.
+*Get the filename for Condotion Records
+  DATA: lv_folder TYPE string.
+  CALL METHOD cl_gui_frontend_services=>directory_browse
+    CHANGING
+      selected_folder = lv_folder
+    EXCEPTIONS
+      OTHERS          = 0.
+
+  p_p_file = lv_folder.
+
+ENDFORM.                    " GET_ONLINE_FILENAME
+*&---------------------------------------------------------------------*
+*&      Form  GET_DATA_<tabname>
+*&---------------------------------------------------------------------*
+* Get the data from KOTD501
+*----------------------------------------------------------------------*
+FORM get_data_<tabname> .
+
+  SELECT                 ##TOO_MANY_ITAB_FIELDS
+     a~auart_sd
+     a~inco1
+     a~kfrst
+     a~sdabw
+     a~datab
+     a~datbi
+     b~knumh
+     b~kappl
+     b~kschl
+     c~krech
+     c~kbetr
+     c~konwa
+     c~kpein
+     c~kmein
+     c~kumza
+     c~kumne
+     c~meins
+     c~kznep
+     c~valtg
+     c~valdt
+     c~zterm
+     c~mxwrt
+     c~gkwrt
+    FROM <tabname> AS a
+    INNER JOIN  konh AS b
+    ON a~knumh = b~knumh
+    INNER JOIN konp AS c
+    ON b~knumh = c~knumh
+    INTO CORRESPONDING FIELDS OF TABLE gt_sheet
+    WHERE a~datbi GE p_valon.
+  IF sy-subrc IS INITIAL.
+    SORT gt_sheet.
+* Get the Scale Data-
+    gt_sheet_t[] = gt_sheet[].
+    DELETE ADJACENT DUPLICATES FROM gt_sheet_t COMPARING knumh.
+    SELECT a~knumh
+           a~klfn1
+           a~kstbm
+           a~kbetr
+           b~konms
+           b~konwa
+      FROM konm AS a
+      LEFT OUTER JOIN konp AS b
+      ON a~knumh = b~knumh
+      INTO CORRESPONDING FIELDS OF TABLE gt_sheet3
+      FOR ALL ENTRIES IN gt_sheet_t
+      WHERE a~knumh = gt_sheet_t-knumh.
+    IF sy-subrc IS INITIAL.
+      SORT gt_sheet3 BY knumh klfn1 ASCENDING.
+    ENDIF.
+**********Sheet1
+    LOOP AT gt_sheet ASSIGNING <gs_sheet>.
+      APPEND INITIAL LINE TO gt_sheet1 ASSIGNING <gs_sheet1>.
+
+      MOVE-CORRESPONDING <gs_sheet> TO <gs_sheet1>.
+**  Date in DD/MM/YYYY.
+      CONCATENATE <gs_sheet1>-datab+6(2) gc_slash
+                  <gs_sheet1>-datab+4(2) gc_slash
+                  <gs_sheet1>-datab(4) INTO <gs_sheet1>-datab.
+**  Date in DD/MM/YYYY.
+      CONCATENATE <gs_sheet1>-datbi+6(2) gc_slash
+                  <gs_sheet1>-datbi+4(2) gc_slash
+                  <gs_sheet1>-datbi(4) INTO <gs_sheet1>-datbi.
+**********Sheet2
+      AT END OF knumh.
+        LOOP AT gt_dd03l INTO gs_dd03l
+                 WHERE tabname = gc_<tabname>.
+          gs_sheet2-knumh = <gs_sheet>-knumh.
+          gs_sheet2-fieldname = gs_dd03l-fieldname.
+          ASSIGN COMPONENT gs_dd03l-fieldname
+                          OF STRUCTURE <gs_sheet> TO <gv_value>.
+          IF <gv_value> IS ASSIGNED.
+            gs_sheet2-fieldval = <gv_value>.
+            APPEND gs_sheet2 TO gt_sheet2.
+          ENDIF.
+          CLEAR gs_sheet2.
+          UNASSIGN <gv_value>.
+        ENDLOOP.
+      ENDAT.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.                    " GET_DATA_<tabname>
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_SHEET
+*&---------------------------------------------------------------------*
+*    Download Sheet Data-Condition Records
+*----------------------------------------------------------------------*
+FORM download_sheet USING p_tab TYPE tabname.
+
+* Sheet1
+  gv_file = p_file1.
+  CONCATENATE gv_file gc_slh p_tab gc_und gc_cond INTO gv_file.
+
+* Download the data- PRC Condition
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = gv_file
+      filetype                = gc_asc
+      write_field_separator   = abap_true
+    TABLES
+      data_tab                = gt_sheet1
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    RETURN.
+  ENDIF.
+* Key Data-
+* Sheet2
+  CLEAR gv_file.
+  gv_file = p_file1.
+  CONCATENATE gv_file gc_slh p_tab gc_und gc_key INTO gv_file.
+
+* Download the data- PRC Condition
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = gv_file
+      filetype                = gc_asc
+      write_field_separator   = abap_true
+    TABLES
+      data_tab                = gt_sheet2
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    RETURN.
+  ENDIF.
+* Scale Data-
+* Sheet3
+  CLEAR gv_file.
+  gv_file = p_file1.
+  CONCATENATE gv_file gc_slh p_tab gc_und gc_scale INTO gv_file.
+
+
+* Download the data- PRC Condition
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = gv_file
+      filetype                = gc_asc
+      write_field_separator   = abap_true
+    TABLES
+      data_tab                = gt_sheet3
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    RETURN.
+  ELSE.
+    gv_success = abap_true.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_SHEET
