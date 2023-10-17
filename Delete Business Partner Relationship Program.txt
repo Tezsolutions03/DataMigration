@@ -1,0 +1,225 @@
+*&---------------------------------------------------------------------*
+*& Report ZCA_DEL_BUS_PARTNER_REL
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZCA_DEL_BUS_PARTNER_REL.
+
+TYPES: BEGIN OF ty_but050,
+         relnr        TYPE bu_relnr,
+         partner1     TYPE bu_partner,
+         partner2     TYPE bu_partner,
+         date_from    TYPE bu_datfrom,
+         date_to      TYPE bu_datto,
+         relationship TYPE bu_reltyp,
+       END OF ty_but050.
+
+DATA: lt_but050       TYPE TABLE OF ty_but050,
+      ls_but050       TYPE ty_but050,
+      ls_return       TYPE bapiret2,
+      lt_log_messages TYPE TABLE OF bapiret2,
+      lt_selopt1      TYPE RANGE OF bu_partner,
+      lv_rel_type     TYPE bu_reltyp,
+      lv_msg_type     TYPE sy-msgty,
+      lv_msg_num      TYPE sy-msgno,
+      lv_msg_text     TYPE sy-msgty,
+      lv_output       TYPE TABLE OF string,
+      lv_part1        TYPE bapibus1006_head-bpartner,
+      lv_part2        TYPE bapibus1006_head-bpartner,
+      lv_reltyp       TYPE but050-reltyp,
+      lv_valto        TYPE bapibus1006002_header-validuntildate,
+      lv_valfrom      TYPE bapibus1006002_header-validfromdate,
+      lt_return       TYPE TABLE OF bapiret2,
+      lv_tot          TYPE i,
+      lv_success      TYPE i,
+      lv_fail         TYPE i.
+
+SELECT-OPTIONS: s_partn1 FOR ls_but050-partner1,  "Business Partner Number/Partner 1
+                s_partn2 FOR ls_but050-partner2,  "Business Partner Number/Partner 2
+                s_datto  FOR ls_but050-date_to NO INTERVALS.   "Valid TO
+
+PARAMETERS: p_reltyp TYPE but050-reltyp OBLIGATORY, "Relationship type
+            p_test   TYPE c.                        "test
+
+START-OF-SELECTION.
+
+  SELECT relnr, partner1, partner2, date_from, date_to, reltyp
+         FROM but050
+         WHERE partner1 IN @s_partn1[]
+         AND partner2 IN @s_partn2[]
+         AND date_to IN @s_datto[]
+         AND reltyp = @p_reltyp
+         INTO TABLE @lt_but050.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'No data found in BUT050 for the given criteria.' TYPE 'E'.
+  ELSE.
+    DESCRIBE TABLE lt_but050 LINES lv_tot.
+    LOOP AT lt_but050 INTO ls_but050.
+      APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                            message_v1 = 'Start of deletion for'
+                            message_v2 = ls_but050-partner1 &&
+                            |/| && ls_but050-partner2 && |/|
+                            message_v3 = ls_but050-relationship &&
+                            |/| && ls_but050-date_to ) TO lt_log_messages.
+
+      CLEAR: lv_part1, lv_part2, lv_reltyp, lv_valto, lv_valfrom.
+      lv_part1      = ls_but050-partner1.
+      lv_part2      = ls_but050-partner2.
+      lv_reltyp     = ls_but050-relationship.
+      lv_valto      = ls_but050-date_to.
+      lv_valfrom    = ls_but050-date_from.
+      CALL FUNCTION 'BAPI_BUPR_RELATIONSHIP_REMOVE'
+        EXPORTING
+          businesspartner1     = lv_part1
+          businesspartner2     = lv_part2
+          relationshipcategory = lv_reltyp
+          validfromdate        = lv_valfrom
+          validuntildate       = lv_valto
+        TABLES
+          return               = lt_return.
+      IF line_exists( lt_return[ type = 'E'] ).
+        lv_fail = lv_fail + 1.
+        APPEND LINES OF lt_return TO lt_log_messages.
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+            IMPORTING
+              return = ls_return.
+      ELSE.
+        lv_success = lv_success + 1.
+        IF lt_return IS NOT INITIAL.
+          MOVE-CORRESPONDING lt_return TO lt_log_messages.
+        ENDIF.
+        IF p_test IS INITIAL.
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait   = 'X'
+            IMPORTING
+              return = ls_return.
+          IF ls_return IS NOT INITIAL .
+            APPEND ls_return TO lt_log_messages.
+          ENDIF.
+          APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                    message_v1 = 'Relationship between'
+                    message_v2 = ls_but050-partner1
+                    message_v3 = ls_but050-partner2
+                    message_v4 = 'deleted successfully.' )
+                    TO lt_log_messages.
+        ELSE.
+          APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                    message_v1 = 'Relationship between'
+                    message_v2 = ls_but050-partner1
+                    message_v3 = ls_but050-partner2
+                    message_v4 = 'will be deleted.' )
+                    TO lt_log_messages.
+
+        ENDIF.
+
+      ENDIF.
+    ENDLOOP.
+
+    CLEAR ls_return.
+    ls_return-type = 'I'.
+    ls_return-id = '00'.
+    ls_return-number = '398'.
+    ls_return-message_v1 = |Total Records : | && lv_tot .
+    ls_return-message_v2 = |Successful Records: | && lv_success.
+    ls_return-message_v3 = 'Failed Records: '.
+    ls_return-message_v4 = lv_fail.
+    CONDENSE ls_return-message_v4.
+    INSERT ls_return INTO lt_log_messages INDEX 1.
+
+    PERFORM create_log.
+  ENDIF.
+
+
+FORM create_log.
+**Local Data Declaration
+  DATA: ls_handle    TYPE balloghndl,
+        ls_log       TYPE bal_s_log,
+        ls_msg1      TYPE bal_s_msg,
+        lt_loghandle TYPE bal_t_logh.
+
+**Local Constant Declaration
+  CONSTANTS: lc_obj(3)  TYPE c VALUE 'BTC',
+             lc_sobj(7) TYPE c VALUE 'DEFAULT'.
+
+* Populate the log header data
+  CLEAR ls_log.
+  ls_log-object     = lc_obj.
+  ls_log-subobject  = lc_sobj.
+  ls_log-aluser     = sy-uname.
+  ls_log-alprog     = sy-repid.
+
+**Instantiation method
+**Get the Log Handle
+  CALL FUNCTION 'BAL_LOG_CREATE'
+    EXPORTING
+      i_s_log                 = ls_log
+    IMPORTING
+      e_log_handle            = ls_handle
+    EXCEPTIONS
+      log_header_inconsistent = 1
+      OTHERS                  = 2.
+  IF sy-subrc = 0.
+    LOOP AT lt_log_messages INTO DATA(ls_msg).
+      MOVE-CORRESPONDING ls_msg TO ls_msg1.
+      ls_msg1-msgid = ls_msg-id.
+      ls_msg1-msgno = ls_msg-number.
+      ls_msg1-msgty = ls_msg-type.
+      ls_msg1-msgv1 = ls_msg-message_v1.
+      ls_msg1-msgv2 = ls_msg-message_v2.
+      ls_msg1-msgv3 = ls_msg-message_v3.
+      ls_msg1-msgv4 = ls_msg-message_v4.
+
+      CALL FUNCTION 'BAL_LOG_MSG_ADD'
+        EXPORTING
+          i_log_handle     = ls_handle
+          i_s_msg          = ls_msg1
+        EXCEPTIONS
+          log_not_found    = 1
+          msg_inconsistent = 2
+          log_is_full      = 3
+          OTHERS           = 4.
+      IF sy-subrc NE 0.
+* Write the output to screen
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+             WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      ENDIF.
+      CLEAR ls_msg.
+    ENDLOOP.
+* Append the log handler to an internal table for saving purposes.
+    APPEND ls_handle TO lt_loghandle.
+    CLEAR ls_handle.
+**Save the log
+    CALL FUNCTION 'BAL_DB_SAVE'
+      EXPORTING
+        i_t_log_handle   = lt_loghandle
+      EXCEPTIONS
+        log_not_found    = 1
+        save_not_allowed = 2
+        numbering_error  = 3
+        OTHERS           = 4.
+    IF sy-subrc NE 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    CALL FUNCTION 'BAL_DSP_LOG_DISPLAY'
+      EXPORTING
+        i_t_log_handle       = lt_loghandle
+      EXCEPTIONS
+        profile_inconsistent = 1
+        internal_error       = 2
+        no_data_available    = 3
+        no_authority         = 4
+        OTHERS               = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ELSE.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+*Clear the Global Internal Table
+  FREE: lt_log_messages.
+ENDFORM.
