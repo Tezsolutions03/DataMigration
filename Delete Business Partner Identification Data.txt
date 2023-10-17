@@ -1,0 +1,201 @@
+*&---------------------------------------------------------------------*
+*& Report ZTEST_PROG2
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ztest_prog2.
+
+
+TABLES: but0id.
+
+DATA: lt_identifications TYPE TABLE OF but0id,
+      ls_return          TYPE bapiret2,
+      lt_return          TYPE TABLE OF bapiret2,
+      lt_log_messages    TYPE TABLE OF bapiret2,
+      lv_tot             TYPE i,
+      lv_success         TYPE i,
+      lv_fail            TYPE i.
+
+DATA : lv_bp  TYPE bapibus1006_head-bpartner,
+       lv_cat TYPE bapibus1006_identification_key-identificationcategory,
+       lv_id  TYPE bapibus1006_identification_key-identificationnumber.
+
+
+SELECT-OPTIONS: so_bp FOR but0id-partner,    "Business Partner
+                so_id FOR but0id-type,       "Identification Type
+                so_idno FOR but0id-idnumber. "Identification Number
+
+PARAMETERS : p_test TYPE c DEFAULT 'X'.      "Test
+
+SELECT * FROM but0id
+  WHERE partner IN @so_bp AND
+        type IN @so_id AND
+        idnumber IN @so_idno
+  INTO TABLE @lt_identifications.
+
+IF lt_identifications IS INITIAL.
+  MESSAGE 'No data found in BUT0ID for the given criteria.' TYPE 'I'.
+ELSE.
+  DESCRIBE TABLE lt_identifications LINES lv_tot.
+  LOOP AT lt_identifications INTO DATA(ls_id).
+    CLEAR : lv_bp,lv_cat, lv_id.
+    lv_bp   = ls_id-partner .
+    lv_cat  = ls_id-type.
+    lv_id   = ls_id-idnumber.
+
+    APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                            message_v1 = 'Start of deletion for'
+                            message_v2 = ls_id-partner && |/| && ls_id-type && |/|
+                            message_v3 = ls_id-idnumber ) TO lt_log_messages.
+
+    CALL FUNCTION 'BAPI_IDENTIFICATION_REMOVE'
+      EXPORTING
+        businesspartner        = lv_bp
+        identificationcategory = lv_cat
+        identificationnumber   = lv_id
+      TABLES
+        return                 = lt_return.
+
+    IF line_exists( lt_return[ type = 'E'] ).
+      lv_fail = lv_fail + 1.
+      APPEND LINES OF lt_return TO lt_log_messages.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+          IMPORTING
+            return = ls_return.
+    ELSE.
+      lv_success = lv_success + 1.
+      IF lt_return IS NOT INITIAL.
+        MOVE-CORRESPONDING lt_return TO lt_log_messages.
+      ENDIF.
+      IF p_test IS INITIAL.
+
+
+        CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+          EXPORTING
+            wait   = 'X'
+          IMPORTING
+            return = ls_return.
+        IF ls_return IS NOT INITIAL .
+          APPEND ls_return TO lt_log_messages.
+        ENDIF.
+
+        APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                            message_v1 = 'Identification for'
+                            message_v2 = ls_id-partner && |/| && ls_id-type && |/|
+                            message_v3 = ls_id-idnumber
+                            message_v4 = 'deleted successfully.' ) TO lt_log_messages.
+      ELSE.
+        APPEND VALUE bapiret2( type = 'S' id = '00' number = '398'
+                           message_v1 = 'Identification for'
+                           message_v2 = ls_id-partner && |/| && ls_id-type && |/|
+                           message_v3 = ls_id-idnumber
+                           message_v4 = 'will be deleted.' ) TO lt_log_messages.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  CLEAR ls_return.
+  ls_return-type = 'I'.
+  ls_return-id = '00'.
+  ls_return-number = '398'.
+  ls_return-message_v1 = |Total Records : | && lv_tot .
+  ls_return-message_v2 = |Successful Records: | && lv_success.
+  ls_return-message_v3 = 'Failed Records: '.
+  ls_return-message_v4 = lv_fail.
+  CONDENSE ls_return-message_v4.
+  INSERT ls_return INTO lt_log_messages INDEX 1.
+
+  PERFORM create_log.
+ENDIF.
+
+FORM create_log.
+**Local Data Declaration
+  DATA: ls_handle    TYPE balloghndl,
+        ls_log       TYPE bal_s_log,
+        ls_msg1      TYPE bal_s_msg,
+        lt_loghandle TYPE bal_t_logh.
+
+**Local Constant Declaration
+  CONSTANTS: lc_obj(3)  TYPE c VALUE 'BTC',
+             lc_sobj(7) TYPE c VALUE 'DEFAULT'.
+
+* Populate the log header data
+  CLEAR ls_log.
+  ls_log-object     = lc_obj.
+  ls_log-subobject  = lc_sobj.
+  ls_log-aluser     = sy-uname.
+  ls_log-alprog     = sy-repid.
+
+**Instantiation method
+**Get the Log Handle
+  CALL FUNCTION 'BAL_LOG_CREATE'
+    EXPORTING
+      i_s_log                 = ls_log
+    IMPORTING
+      e_log_handle            = ls_handle
+    EXCEPTIONS
+      log_header_inconsistent = 1
+      OTHERS                  = 2.
+  IF sy-subrc = 0.
+    LOOP AT lt_log_messages INTO DATA(ls_msg).
+      MOVE-CORRESPONDING ls_msg TO ls_msg1.
+      ls_msg1-msgid = ls_msg-id.
+      ls_msg1-msgno = ls_msg-number.
+      ls_msg1-msgty = ls_msg-type.
+      ls_msg1-msgv1 = ls_msg-message_v1.
+      ls_msg1-msgv2 = ls_msg-message_v2.
+      ls_msg1-msgv3 = ls_msg-message_v3.
+      ls_msg1-msgv4 = ls_msg-message_v4.
+
+      CALL FUNCTION 'BAL_LOG_MSG_ADD'
+        EXPORTING
+          i_log_handle     = ls_handle
+          i_s_msg          = ls_msg1
+        EXCEPTIONS
+          log_not_found    = 1
+          msg_inconsistent = 2
+          log_is_full      = 3
+          OTHERS           = 4.
+      IF sy-subrc NE 0.
+* Write the output to screen
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+             WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      ENDIF.
+      CLEAR ls_msg.
+    ENDLOOP.
+* Append the log handler to an internal table for saving purposes.
+    APPEND ls_handle TO lt_loghandle.
+    CLEAR ls_handle.
+**Save the log
+    CALL FUNCTION 'BAL_DB_SAVE'
+      EXPORTING
+        i_t_log_handle   = lt_loghandle
+      EXCEPTIONS
+        log_not_found    = 1
+        save_not_allowed = 2
+        numbering_error  = 3
+        OTHERS           = 4.
+    IF sy-subrc NE 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    CALL FUNCTION 'BAL_DSP_LOG_DISPLAY'
+      EXPORTING
+        i_t_log_handle       = lt_loghandle
+      EXCEPTIONS
+        profile_inconsistent = 1
+        internal_error       = 2
+        no_data_available    = 3
+        no_authority         = 4
+        OTHERS               = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ELSE.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+*Clear the Global Internal Table
+  FREE: lt_log_messages.
+ENDFORM.
