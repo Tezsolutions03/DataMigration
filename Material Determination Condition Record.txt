@@ -1,7 +1,15 @@
 *&---------------------------------------------------------------------*
 *& Report  ZMAT_DET_CONDREC_DWLD
 *&---------------------------------------------------------------------*
-
+* If you are planning to utikize this program for downloading the
+* material determination condition records from SAP ECC or SAP R3 system,
+* then, identify the material determination condition record table first.
+* Mat det. condition record table names starts with KOTD* prefix(examples:
+* KOTD901, KOTD902 etc). Before using this program, please replace 
+* <tabno> with the table number excluding the prefix. For example, if 
+* you are planning to use the program to download the data from KOTD901
+* table,then replace <tabno> with 901.
+*&---------------------------------------------------------------------*
 REPORT ZMAT_DET_CONDREC_DWLD.
 
 * Selection Screen- Checkbox
