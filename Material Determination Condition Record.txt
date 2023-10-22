@@ -1,0 +1,291 @@
+*&---------------------------------------------------------------------*
+*& Report  ZMAT_DET_CONDREC_DWLD
+*&---------------------------------------------------------------------*
+
+REPORT ZMAT_DET_CONDREC_DWLD.
+
+* Selection Screen- Checkbox
+SELECTION-SCREEN: BEGIN OF BLOCK a WITH FRAME TITLE text-001. "Data Load Tables
+PARAMETERS : p_tab<tabno> TYPE c AS CHECKBOX. "KOTD<tabno>
+SELECTION-SCREEN END OF BLOCK a.
+
+*Selection Screen - File Path and valid date
+SELECTION-SCREEN: BEGIN OF BLOCK b WITH FRAME TITLE text-002. "Selection Criteria
+PARAMETERS : p_valon TYPE sy-datum DEFAULT sy-datum OBLIGATORY, "Valid On
+             p_file1  LIKE rlgrap-filename OBLIGATORY.    "Condition Record File Path
+SELECTION-SCREEN END OF BLOCK b.
+
+* Types Declaration
+*Condition Records
+TYPES : BEGIN OF ts_sheet1,
+          knumh TYPE knumh,
+          kschl TYPE kschl,
+          tabno TYPE char4,
+          smatn TYPE smatn,
+          meins TYPE meins,
+          sugrd TYPE sugrd_ms,
+          psdsp TYPE psdsp,
+          datab TYPE char10,
+          datbi TYPE char10,
+        END OF ts_sheet1,
+* Condition Table Keys
+        BEGIN OF ts_sheet2,
+          knumh     TYPE knumh,
+          fieldname TYPE fieldname,
+          fieldval  TYPE char80,
+        END OF ts_sheet2,
+        BEGIN OF ts_dd03l,
+          tabname TYPE tabname,
+          fieldname TYPE fieldname,
+        END OF ts_dd03l.
+
+* Data Declaration
+* Internal Table
+DATA : gt_kotd<tabno> TYPE TABLE OF kotd<tabno>,
+       gt_kondd   TYPE TABLE OF kondd,
+       gt_sheet1  TYPE TABLE OF ts_sheet1,
+       gt_sheet2  TYPE TABLE OF ts_sheet2,
+       gt_dd03l   TYPE TABLE OF ts_dd03l,
+       gt_org_mapped TYPE zca_mig_sales_org_t,
+*Work Area
+       gs_kotd<tabno> TYPE kotd<tabno>,
+       gs_kondd   TYPE kondd,
+       gs_sheet1  TYPE ts_sheet1,
+       gs_sheet2  TYPE ts_sheet2,
+       gs_dd03l   TYPE ts_dd03l,
+       gs_org_map TYPE zca_mig_sales_org,
+* Variable
+       gv_file    TYPE string,
+       gv_lines   TYPE i,
+       gv_kunnr   TYPE kunnr.
+
+
+*Constant Declaration
+CONSTANTS : gc_kotd<tabno> TYPE tabname   VALUE 'KOTD<tabno>',
+            gc_mandt   TYPE fieldname VALUE 'MANDT',
+            gc_kappl   TYPE fieldname VALUE 'KAPPL',
+            gc_kschl   TYPE fieldname VALUE 'KSCHL',
+            gc_datbi   TYPE fieldname VALUE 'DATBI',
+            gc_<tabno>     TYPE char3     VALUE '<tabno>',
+            gc_slash   TYPE c         VALUE '\',
+            gc_asc(10) TYPE c         VALUE 'ASC',
+            gc_spart   TYPE spart     VALUE '01',
+            gc_und(1)  TYPE c         VALUE '_',
+            gc_cond(8)  TYPE c         VALUE 'REC',
+            gc_condk(11) TYPE c        VALUE 'KEY'.
+
+* Field Symbol
+FIELD-SYMBOLS : <gv_value> TYPE any.
+
+* Get the File Path for ondition Records
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file1.
+  PERFORM get_online_filename USING p_file1.
+
+START-OF-SELECTION.
+  IF p_tab<tabno> IS INITIAL.
+* Display the message to select atleast one checkbox
+    MESSAGE e000(zasd3) WITH text-003. "Select atleast one checkbox
+  ENDIF.
+
+* Get the table fields for the relevant tables with Key field
+  SELECT tabname fieldname FROM dd03l
+    INTO TABLE gt_dd03l
+    WHERE tabname IN (gc_kotd<tabno>)
+    AND fieldname NOT IN (gc_mandt, gc_kappl, gc_kschl, gc_datbi)
+    AND keyflag = abap_true.
+  IF sy-subrc = 0.
+    SORT gt_dd03l.
+  ENDIF.
+* KOTD<tabno>
+  IF p_tab<tabno> IS NOT INITIAL.
+    PERFORM get_data_<tabno>.
+  ENDIF.
+
+* Download the Condition Records
+  IF gt_sheet1 IS NOT INITIAL.
+    PERFORM download_sheet1.
+  ELSE.
+    WRITE: / text-005.  "Condition Records Not Found
+  ENDIF.
+
+* Download the Condition Table Keys
+  IF gt_sheet2 IS NOT INITIAL.
+    PERFORM download_sheet2.
+  ELSE.
+    WRITE : / text-006. "No Records Found For Condition Table Keys
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_ONLINE_FILENAME
+*&---------------------------------------------------------------------*
+*  Get the filename for Condition Records and Condition Table Keys
+*----------------------------------------------------------------------*
+FORM get_online_filename  USING    p_p_file TYPE rlgrap-filename.
+*Get the filename for Condotion Records
+  DATA: lv_folder TYPE string.
+  CALL METHOD cl_gui_frontend_services=>directory_browse
+    CHANGING
+      selected_folder = lv_folder
+    EXCEPTIONS
+      OTHERS          = 0.
+
+  p_p_file = lv_folder.
+ENDFORM.                    " GET_ONLINE_FILENAME
+*&---------------------------------------------------------------------*
+*&      Form  GET_DATA_<tabno>
+*&---------------------------------------------------------------------*
+* Get the data from KOTD<tabno>
+*----------------------------------------------------------------------*
+FORM get_data_<tabno> .
+* Get the data from KOTD<tabno> based on valida date
+  SELECT *
+    FROM kotd<tabno> AS a
+    INTO TABLE gt_kotd<tabno>
+    WHERE a~datab LE p_valon
+      AND a~datbi GE p_valon.
+  IF sy-subrc EQ 0.
+    SORT gt_kotd<tabno> BY knumh.
+* Get the data from KONDD based on condition Record Number
+    SELECT * FROM kondd
+      APPENDING TABLE gt_kondd
+      FOR ALL ENTRIES IN gt_kotd<tabno>
+      WHERE knumh = gt_kotd<tabno>-knumh.
+    IF sy-subrc EQ 0.
+      SORT gt_kondd BY knumh.
+      LOOP AT gt_kotd<tabno> INTO gs_kotd<tabno>.
+        READ TABLE gt_kondd INTO gs_kondd
+                        WITH KEY knumh = gs_kotd<tabno>-knumh
+                        BINARY SEARCH.
+        IF sy-subrc EQ 0.
+*  Populate sheet 1.
+          gs_sheet1-tabno = gc_<tabno>.
+          MOVE-CORRESPONDING gs_kotd<tabno> TO gs_sheet1.
+          MOVE-CORRESPONDING gs_kondd TO gs_sheet1.         "#EC ENHOK
+
+*  Date in DD/MM/YYYY.
+          CONCATENATE gs_kotd<tabno>-datab+6(2) gc_slash
+                      gs_kotd<tabno>-datab+4(2) gc_slash
+                      gs_kotd<tabno>-datab(4) INTO gs_sheet1-datab.
+*  Date in DD/MM/YYYY.
+          CONCATENATE gs_kotd<tabno>-datbi+6(2) gc_slash
+                      gs_kotd<tabno>-datbi+4(2) gc_slash
+                      gs_kotd<tabno>-datbi(4) INTO gs_sheet1-datbi.
+          APPEND gs_sheet1 TO gt_sheet1.
+
+* Populate sheet 2
+          LOOP AT gt_dd03l INTO gs_dd03l WHERE tabname = gc_kotd<tabno>. "#EC CI_STDSEQ
+            gs_sheet2-knumh = gs_kotd<tabno>-knumh.
+            gs_sheet2-fieldname = gs_dd03l-fieldname.
+            ASSIGN COMPONENT gs_dd03l-fieldname
+                            OF STRUCTURE gs_kotd<tabno> TO <gv_value>.
+            IF <gv_value> IS ASSIGNED.
+              gs_sheet2-fieldval = <gv_value>.
+              APPEND gs_sheet2 TO gt_sheet2.
+            ENDIF.
+            CLEAR gs_sheet2.
+            UNASSIGN <gv_value>.
+          ENDLOOP.
+          CLEAR : gs_kondd, gs_sheet1.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " GET_DATA_<tabno>
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_SHEET
+*&---------------------------------------------------------------------*
+*    Download Sheet Data-Condition Records
+*----------------------------------------------------------------------*
+FORM download_sheet1.
+* Get the file path
+  gv_file = p_file1.
+
+  CONCATENATE gv_file gc_slash gc_kotd<tabno> gc_und gc_cond INTO gv_file.
+
+* Download the data
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = gv_file
+      filetype                = gc_asc
+      write_field_separator   = abap_true
+    TABLES
+      data_tab                = gt_sheet1
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    WRITE / text-004. "Data Extracted Successfully for Condition Records
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_SHEET1
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_SHEET2
+*&---------------------------------------------------------------------*
+*  Download Sheet2 Data- Condition Table Keys
+*----------------------------------------------------------------------*
+FORM download_sheet2 .
+* Get the File Path
+  gv_file = p_file1.
+
+  CONCATENATE gv_file gc_slash gc_kotd<tabno> gc_und gc_condk INTO gv_file.
+
+* Download the data
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = gv_file
+      filetype                = gc_asc
+      write_field_separator   = abap_true
+    TABLES
+      data_tab                = gt_sheet2
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    WRITE: / text-007.  "Data Extracted Successfully for Condition Table Keys
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_SHEET2
